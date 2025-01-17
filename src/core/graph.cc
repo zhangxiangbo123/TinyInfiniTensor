@@ -1,8 +1,17 @@
 #include "core/graph.h"
+#include "core/blob.h"
+#include "core/op_type.h"
+#include "core/ref.h"
+#include "core/runtime.h"
+#include "core/tensor.h"
+#include "operators/matmul.h"
+#include "operators/transpose.h"
 #include <algorithm>
+#include <alloca.h>
+#include <memory>
 #include <numeric>
 #include <queue>
-
+#include <vector>
 namespace infini
 {
 
@@ -98,15 +107,97 @@ namespace infini
         return this->sorted = true;
     }
 
-    void GraphObj::optimize()
-    {
+    void GraphObj::optimize() {
         // =================================== 作业 ===================================
         // TODO: 设计一个算法来实现指定的图优化规则
         // 图优化规则如下：
         // 1. 去除冗余的算子（例如，两个相邻的算子都是 transpose 算子，且做的是相反的操作，可以将其全部删除）
         // 2. 合并算子（例如，矩阵乘算子中含有属性transA、transB，如果其输入存在transpose，且对最后两个维度做交换，就可以将transpose融入到矩阵乘算子的属性中去）
         // =================================== 作业 ===================================
+
+        int op_size = ops.size();
+        for (int i = 0; i < op_size; i++) {
+            auto op = ops[i];
+            if (op->getOpType() == OpType::Transpose) {
+                auto trans_op = as<TransposeObj>(op);
+                auto prev_ops = trans_op->getPredecessors();
+                if ((prev_ops.size() == 1) &&
+                    (prev_ops[0]->getOpType() == OpType::Transpose) &&
+                    (prev_ops[0]->getSuccessors().size() == 1)) {
+                    auto input = op->getInputs(0);
+                    auto prev_trans_op = as<TransposeObj>(prev_ops[0]);
+                    auto prev_input = prev_trans_op->getInputs(0);
+                    Shape prev_premute = prev_trans_op->getPermute();
+                    Shape premute = trans_op->getPermute();
+                    if (prev_premute == premute) {
+                        prev_input->removeTarget(prev_trans_op); 
+                        prev_trans_op->removeSuccessors(op);
+    
+                        for (auto succ : op->getSuccessors()) {
+                            succ->replaceInput(op->getOutput(), prev_input);
+                            prev_input->addTarget(succ);
+                            succ->removePredecessors(op);
+                        }
+                        removeTensor(op->getOutput());
+                        removeOperator(op);
+                        removeOperator(prev_trans_op);
+                        removeTensor(input);
+                        i = i - 2;
+                        op_size = ops.size();
+                        continue;
+                    }
+                }
+            }
+            if (op->getOpType() == OpType::MatMul) {
+                auto matmul_op = as<MatmulObj>(op);
+                auto prev_ops = matmul_op->getPredecessors();
+                auto inputs = matmul_op->getInputs();
+
+                for (int j = 0; j < static_cast<int>(prev_ops.size()); j++) {
+                    auto prev_op = prev_ops[j];
+                    if ((prev_op->getOpType() == OpType::Transpose) &&
+                        prev_op->getSuccessors().size() == 1) {
+                        auto matmul_input = inputs[j];
+                        auto trans_op = as<TransposeObj>(prev_op);
+                        auto trans_op_output = trans_op->getOutput(0);
+
+                        Shape permute = trans_op->getPermute();
+                        int rank = permute.size();
+                        bool flag = false;
+                        if (permute[rank - 1] == rank - 2 && permute[rank - 2] == rank - 1) {
+                            flag = true;
+                        }
+                        if (flag) {
+                            if (trans_op_output->getFuid() == matmul_op->getInputs(0)->getFuid()) {
+                                matmul_op->setTransA(true);
+                            } else {
+                                matmul_op->setTransB(true);
+                                matmul_input = matmul_op->getInputs(1);
+                            }
+                
+                            auto trans_input = trans_op->getInputs(0);
+                            trans_input->removeTarget(prev_op);
+                            trans_input->addTarget(op);
+                            trans_op_output->removeTarget(op);
+                
+                            op->replaceInput(matmul_input, trans_input);
+                            op->removePredecessors(prev_op);
+                            prev_op->removeSuccessors(op);
+                            removeOperator(prev_op);
+                            removeTensor(trans_op_output);
+                    
+                            i = i - 1;
+                            op_size = ops.size();
+                            continue;
+                        } else {
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
     }
+
 
     Tensor GraphObj::getTensor(int fuid) const
     {
@@ -152,7 +243,17 @@ namespace infini
         // TODO：利用 allocator 给计算图分配内存
         // HINT: 获取分配好的内存指针后，可以调用 tensor 的 setDataBlob 函数给 tensor 绑定内存
         // =================================== 作业 ===================================
-
+        auto n = this->tensors.size();
+        vector<size_t> offsets(n);
+        for (size_t i = 0; i < n; i++) {
+            offsets[i] = this->allocator.alloc(this->tensors[i]->getBytes());
+        }
+        auto hptr = this->allocator.getPtr();
+        for (size_t i = 0; i < n; i++) {
+            auto ptr = hptr + offsets[i];
+            auto blob = make_ref<BlobObj>(this->runtime, ptr);
+            this->tensors[i]->setDataBlob(blob);
+        }
         allocator.info();
     }
 

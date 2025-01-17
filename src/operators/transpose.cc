@@ -33,8 +33,16 @@ namespace infini
         // TODO：修改 output_dim，返回正确的 transpose 后的 shape
         // REF: https://onnx.ai/onnx/operators/onnx__Transpose.html#transpose-21
         // =================================== 作业 ===================================
+        if (size_t(rank) != this->transposePermute.size()){
+            return std::nullopt;
+        }
 
-        return std::nullopt;
+        for (auto i = 0; i < rank; i++){
+            auto tmp = this->transposePermute[i];
+            output_dim[i] = input_dim[tmp];
+        }
+        return {{output_dim}};
+        
     }
 
     std::string TransposeObj::toString() const

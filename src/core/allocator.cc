@@ -32,8 +32,21 @@ namespace infini
         // =================================== 作业 ===================================
         // TODO: 设计一个算法来分配内存，返回起始地址偏移量
         // =================================== 作业 ===================================
+        this->used += size;
+        for (auto it = this->freeBlocks.begin(); it != this->freeBlocks.end(); it++){
+            if (it->second >= size){
+                size_t addr = it -> first;
+                if (it ->second > size){
+                    this->freeBlocks[addr + size] = it->second - size;
+                }
+                this->freeBlocks.erase(it);
+                return addr;
+            }
+        }
 
-        return 0;
+        size_t newAddr = this->peak;
+        this->peak += size;
+        return newAddr;
     }
 
     void Allocator::free(size_t addr, size_t size)
@@ -44,6 +57,33 @@ namespace infini
         // =================================== 作业 ===================================
         // TODO: 设计一个算法来回收内存
         // =================================== 作业 ===================================
+        this->used -= size;
+        if (addr + size == this->peak) {
+            this->peak -= size;
+            this->freeBlocks[addr] = size;
+            return;
+        }   
+
+        for (auto it = this->freeBlocks.begin(); it != this->freeBlocks.end(); it ++){
+            // 向前合并
+            if (it->first + it->second == addr){
+                it->second +=size;
+                auto tmp = this->freeBlocks.find(addr);
+                this->freeBlocks.erase(tmp);
+                return;
+            }
+
+            // 向后合并
+            if (addr + size == it->first){
+                this->freeBlocks[addr] = size + it->second;
+                this->freeBlocks.erase(it);
+                return;
+            }
+        }
+
+        // 无法合并
+        this->freeBlocks[addr] = size;
+        return;
     }
 
     void *Allocator::getPtr()
